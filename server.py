@@ -30,6 +30,30 @@ class BlockzaClient:
     BASE_URL = "https://api.blockza.io/api"
 
     @staticmethod
+    def filter_event_fields(event: dict[str, Any]) -> dict[str, Any]:
+        """Extract only essential fields from an event to reduce payload size
+
+        Args:
+            event: Full event dictionary
+
+        Returns:
+            Filtered event with only essential fields
+        """
+        return {
+            "_id": event.get("_id"),
+            "title": event.get("title"),
+            "description": event.get("description", "")[:200],  # Truncate long descriptions
+            "location": event.get("location"),
+            "country": event.get("country"),
+            "city": event.get("city"),
+            "eventStartDate": event.get("eventStartDate"),
+            "eventEndDate": event.get("eventEndDate"),
+            "category": event.get("category"),
+            "website": event.get("website"),
+            "company": event.get("company")
+        }
+
+    @staticmethod
     def get_events(
         limit: Optional[int] = None,
         offset: Optional[int] = None,
@@ -72,7 +96,11 @@ class BlockzaClient:
             response.raise_for_status()
 
             data = response.json()
-            return data if isinstance(data, list) else []
+            events = data if isinstance(data, list) else []
+
+            # Filter events to reduce payload size
+            filtered_events = [BlockzaClient.filter_event_fields(event) for event in events]
+            return filtered_events
         except requests.exceptions.RequestException as e:
             print(f"Error fetching events: {e}")
             return []
@@ -147,20 +175,22 @@ def timestamp() -> dict[str, Any]:
 
 @mcp.tool()
 def list_events(
-    limit: int = 20,
+    limit: int = 5,
     offset: int = 0,
     upcoming_only: bool = False
 ) -> str:
     """List blockchain events from Blockza directory
 
     Args:
-        limit: Maximum number of events to return (default: 20)
+        limit: Maximum number of events to return (default: 5, max: 20)
         offset: Number of events to skip for pagination (default: 0)
         upcoming_only: Only return upcoming events (default: False)
 
     Returns:
         JSON string with events data
     """
+    # Cap limit to prevent token overflow
+    limit = min(limit, 20)
     events = BlockzaClient.get_events(
         limit=limit,
         offset=offset,
@@ -172,7 +202,7 @@ def list_events(
 @mcp.tool()
 def search_events(
     query: str,
-    limit: int = 10,
+    limit: int = 5,
     country: Optional[str] = None,
     city: Optional[str] = None
 ) -> str:
@@ -180,13 +210,15 @@ def search_events(
 
     Args:
         query: Search term for event name or description
-        limit: Maximum number of results (default: 10)
+        limit: Maximum number of results (default: 5, max: 15)
         country: Filter by country (optional)
         city: Filter by city (optional)
 
     Returns:
         JSON string with matching events
     """
+    # Cap limit to prevent token overflow
+    limit = min(limit, 15)
     events = BlockzaClient.get_events(
         search=query,
         limit=limit,
@@ -213,15 +245,17 @@ def get_event_details(event_id: str) -> str:
 
 
 @mcp.tool()
-def get_upcoming_events(limit: int = 10) -> str:
+def get_upcoming_events(limit: int = 5) -> str:
     """Get upcoming blockchain events
 
     Args:
-        limit: Maximum number of events to return (default: 10)
+        limit: Maximum number of events to return (default: 5, max: 15)
 
     Returns:
         JSON string with upcoming events
     """
+    # Cap limit to prevent token overflow
+    limit = min(limit, 15)
     events = BlockzaClient.get_events(
         limit=limit,
         upcoming=True
@@ -230,17 +264,19 @@ def get_upcoming_events(limit: int = 10) -> str:
 
 
 @mcp.tool()
-def search_events_by_location(country: Optional[str] = None, city: Optional[str] = None, limit: int = 20) -> str:
+def search_events_by_location(country: Optional[str] = None, city: Optional[str] = None, limit: int = 5) -> str:
     """Find blockchain events in a specific location
 
     Args:
         country: The country to filter by (e.g., "USA", "UAE") (optional)
         city: The city to filter by (e.g., "San Francisco", "Dubai") (optional)
-        limit: Maximum number of events to return (default: 20)
+        limit: Maximum number of events to return (default: 5, max: 15)
 
     Returns:
         JSON string with events in the specified location
     """
+    # Cap limit to prevent token overflow
+    limit = min(limit, 15)
     events = BlockzaClient.get_events(
         country=country,
         city=city,
@@ -297,15 +333,15 @@ def get_data(id: str) -> str:
 
 @mcp.resource("blockza://events")
 def resource_all_events() -> str:
-    """Access all blockchain events from Blockza directory"""
-    events = BlockzaClient.get_events(limit=50)
+    """Access blockchain events from Blockza directory (limited to 10 for performance)"""
+    events = BlockzaClient.get_events(limit=10)
     return json.dumps({"events": events, "count": len(events)}, indent=2)
 
 
 @mcp.resource("blockza://events/upcoming")
 def resource_upcoming_events() -> str:
-    """Access upcoming blockchain events"""
-    events = BlockzaClient.get_events(limit=30, upcoming=True)
+    """Access upcoming blockchain events (limited to 10 for performance)"""
+    events = BlockzaClient.get_events(limit=10, upcoming=True)
     return json.dumps({"events": events, "count": len(events)}, indent=2)
 
 
