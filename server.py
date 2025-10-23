@@ -143,7 +143,7 @@ def list_events(
         upcoming_only: Only return upcoming events (default: False)
 
     Returns:
-        JSON string with events data
+        JSON string with formatted event cards
     """
     # Cap limit to prevent token overflow
     limit = min(limit, 20)
@@ -152,7 +152,27 @@ def list_events(
         offset=offset,
         upcoming=upcoming_only
     )
-    return json.dumps({"events": events, "count": len(events)}, indent=2)
+
+    # Format events as cards for display
+    formatted_events = {
+        "type": "event_cards",
+        "layout": "grid",
+        "count": len(events),
+        "events": [
+            {
+                "id": event.get("_id"),
+                "title": event.get("title"),
+                "location": f"{event.get('city', 'N/A')}, {event.get('country', 'N/A')}",
+                "date": event.get("eventStartDate"),
+                "category": event.get("category"),
+                "description": event.get("description", "")[:150],
+                "website": event.get("website"),
+                "company": event.get("company")
+            }
+            for event in events
+        ]
+    }
+    return json.dumps(formatted_events, indent=2)
 
 
 @mcp.tool()
@@ -171,7 +191,7 @@ def search_events(
         city: Filter by city (optional)
 
     Returns:
-        JSON string with matching events
+        JSON string with formatted event cards
     """
     # Cap limit to prevent token overflow
     limit = min(limit, 15)
@@ -181,7 +201,28 @@ def search_events(
         country=country,
         city=city
     )
-    return json.dumps({"events": events, "count": len(events)}, indent=2)
+
+    # Format events as cards for display
+    formatted_events = {
+        "type": "event_cards",
+        "layout": "grid",
+        "count": len(events),
+        "query": query,
+        "events": [
+            {
+                "id": event.get("_id"),
+                "title": event.get("title"),
+                "location": f"{event.get('city', 'N/A')}, {event.get('country', 'N/A')}",
+                "date": event.get("eventStartDate"),
+                "category": event.get("category"),
+                "description": event.get("description", "")[:150],
+                "website": event.get("website"),
+                "company": event.get("company")
+            }
+            for event in events
+        ]
+    }
+    return json.dumps(formatted_events, indent=2)
 
 
 @mcp.tool()
@@ -208,7 +249,7 @@ def get_upcoming_events(limit: int = 5) -> str:
         limit: Maximum number of events to return (default: 5, max: 15)
 
     Returns:
-        JSON string with upcoming events
+        JSON string with formatted event cards
     """
     # Cap limit to prevent token overflow
     limit = min(limit, 15)
@@ -216,7 +257,28 @@ def get_upcoming_events(limit: int = 5) -> str:
         limit=limit,
         upcoming=True
     )
-    return json.dumps({"events": events, "count": len(events)}, indent=2)
+
+    # Format events as cards for display
+    formatted_events = {
+        "type": "event_cards",
+        "layout": "grid",
+        "count": len(events),
+        "filter": "upcoming",
+        "events": [
+            {
+                "id": event.get("_id"),
+                "title": event.get("title"),
+                "location": f"{event.get('city', 'N/A')}, {event.get('country', 'N/A')}",
+                "date": event.get("eventStartDate"),
+                "category": event.get("category"),
+                "description": event.get("description", "")[:150],
+                "website": event.get("website"),
+                "company": event.get("company")
+            }
+            for event in events
+        ]
+    }
+    return json.dumps(formatted_events, indent=2)
 
 
 @mcp.tool()
@@ -229,7 +291,7 @@ def search_events_by_location(country: Optional[str] = None, city: Optional[str]
         limit: Maximum number of events to return (default: 5, max: 15)
 
     Returns:
-        JSON string with events in the specified location
+        JSON string with formatted event cards
     """
     # Cap limit to prevent token overflow
     limit = min(limit, 15)
@@ -238,7 +300,34 @@ def search_events_by_location(country: Optional[str] = None, city: Optional[str]
         city=city,
         limit=limit
     )
-    return json.dumps({"events": events, "count": len(events)}, indent=2)
+
+    # Format events as cards for display
+    location_filter = []
+    if country:
+        location_filter.append(country)
+    if city:
+        location_filter.append(city)
+
+    formatted_events = {
+        "type": "event_cards",
+        "layout": "grid",
+        "count": len(events),
+        "location": " ".join(location_filter),
+        "events": [
+            {
+                "id": event.get("_id"),
+                "title": event.get("title"),
+                "location": f"{event.get('city', 'N/A')}, {event.get('country', 'N/A')}",
+                "date": event.get("eventStartDate"),
+                "category": event.get("category"),
+                "description": event.get("description", "")[:150],
+                "website": event.get("website"),
+                "company": event.get("company")
+            }
+            for event in events
+        ]
+    }
+    return json.dumps(formatted_events, indent=2)
 
 
 # ========== BLOCKZA EVENT RESOURCES ==========
