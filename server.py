@@ -25,12 +25,15 @@ mcp = FastMCP(SERVER_NAME)
 # ========== BLOCKZA API CLIENT ==========
 
 class BlockzaClient:
-    """Client for interacting with Blockza API"""
+    """Client for interacting with Blockza API with separate endpoints for better performance"""
 
+    # Dedicated API Endpoints
     BASE_URL = "https://api.blockza.io/api"
     EVENTS_URL = "https://api.blockza.io/api/events"
     PODCASTS_URL = "https://api.blockza.io/api/podcasts"
-    DIRECTORY_URL = "https://api.blockza.io/api/directory"
+    DIRECTORY_URL = "https://api.blockza.io/api/directory"  # Companies only
+    EXPERTS_URL = "https://api.blockza.io/api/experts"  # Standalone experts
+    BOOKINGS_URL = "https://api.blockza.io/api/bookings"  # Expert bookings
 
     @staticmethod
     def filter_event_fields(event: dict[str, Any]) -> dict[str, Any]:
@@ -269,10 +272,10 @@ class BlockzaClient:
 
     @staticmethod
     def filter_expert_fields(expert: dict[str, Any]) -> dict[str, Any]:
-        """Extract only essential fields from an expert to reduce payload size
+        """Extract only essential fields from a standalone expert - from /api/experts endpoint
 
         Args:
-            expert: Full expert/team member dictionary
+            expert: Full expert dictionary from /api/experts
 
         Returns:
             Filtered expert with only essential fields
@@ -292,24 +295,114 @@ class BlockzaClient:
         }
 
     @staticmethod
+    def filter_team_member_fields(member: dict[str, Any], company_name: str = "") -> dict[str, Any]:
+        """Extract only essential fields from a company team member - from /api/directory
+
+        Args:
+            member: Full team member dictionary from company
+            company_name: Name of the company they belong to
+
+        Returns:
+            Filtered team member with company context
+        """
+        return {
+            "_id": member.get("_id"),
+            "name": member.get("name"),
+            "title": member.get("title"),
+            "email": member.get("email"),
+            "image": member.get("image"),
+            "linkedinUrl": member.get("linkedinUrl"),
+            "price": member.get("price", 0),
+            "bookingMethods": member.get("bookingMethods", []),
+            "status": member.get("status"),
+            "followers": member.get("followers", 0),
+            "responseRate": member.get("responseRate", 0),
+            "company": company_name,
+            "memberType": "company_team_member"
+        }
+
+    @staticmethod
     def get_experts(
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        search: Optional[str] = None,
-        category: Optional[str] = None,
-        company: Optional[str] = None
+        search: Optional[str] = None
     ) -> list[dict[str, Any]]:
-        """Fetch experts/consultants from Blockza directory
+        """Fetch standalone experts from dedicated /api/experts endpoint
 
         Args:
             limit: Maximum number of experts to return
             offset: Number of experts to skip
             search: Search query for expert name or title
-            category: Filter by company category
-            company: Filter by company
 
         Returns:
             List of expert dictionaries
+        """
+        try:
+            url = BlockzaClient.EXPERTS_URL
+            params = {}
+
+            if limit is not None:
+                params["limit"] = limit
+            if offset is not None:
+                params["offset"] = offset
+            if search:
+                params["search"] = search
+
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            experts = data if isinstance(data, list) else (data.get("data", []) if isinstance(data, dict) else [])
+
+            # Filter experts to reduce payload size
+            filtered_experts = [BlockzaClient.filter_expert_fields(exp) for exp in experts]
+            return filtered_experts
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching experts from /api/experts: {e}")
+            return []
+
+    @staticmethod
+    def get_expert_by_id(expert_id: str) -> dict[str, Any] | None:
+        """Fetch a specific expert by ID from /api/experts/:id
+
+        Args:
+            expert_id: The expert identifier
+
+        Returns:
+            Expert data dictionary or None if not found
+        """
+        try:
+            url = f"{BlockzaClient.EXPERTS_URL}/{expert_id}"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            if data:
+                return BlockzaClient.filter_expert_fields(data)
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching expert by ID: {e}")
+            return None
+
+    @staticmethod
+    def get_team_members(
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        search: Optional[str] = None,
+        company: Optional[str] = None,
+        category: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Fetch team members from companies via /api/directory endpoint
+
+        Args:
+            limit: Maximum number of team members to return
+            offset: Number to skip
+            search: Search query for member name
+            company: Filter by company name
+            category: Filter by company category
+
+        Returns:
+            List of team member dictionaries with company context
         """
         try:
             url = BlockzaClient.DIRECTORY_URL
@@ -317,8 +410,6 @@ class BlockzaClient:
 
             if limit is not None:
                 params["limit"] = limit
-            if offset is not None:
-                params["offset"] = offset
             if search:
                 params["search"] = search
             if category:
@@ -331,13 +422,17 @@ class BlockzaClient:
             companies = data.get("data", []) if isinstance(data, dict) else []
 
             # Extract all team members from all companies
-            experts = []
+            team_members = []
             for company_data in companies:
+                company_name = company_data.get("name", "")
+
+                # Filter by company if specified
+                if company and company.lower() not in company_name.lower():
+                    continue
+
                 if "teamMembers" in company_data:
                     for member in company_data["teamMembers"]:
-                        # Add company context to expert
-                        member_with_context = {**member, "company": company_data.get("name")}
-                        filtered = BlockzaClient.filter_expert_fields(member_with_context)
+                        filtered = BlockzaClient.filter_team_member_fields(member, company_name)
 
                         # Apply search filter if provided
                         if search:
@@ -345,37 +440,37 @@ class BlockzaClient:
                             if (search_lower in filtered.get("name", "").lower() or
                                 search_lower in filtered.get("title", "").lower() or
                                 search_lower in filtered.get("email", "").lower()):
-                                experts.append(filtered)
+                                team_members.append(filtered)
                         else:
-                            experts.append(filtered)
+                            team_members.append(filtered)
 
             # Apply limit
             if limit:
-                experts = experts[:limit]
+                team_members = team_members[:limit]
 
-            return experts
+            return team_members
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching experts: {e}")
+            print(f"Error fetching team members from /api/directory: {e}")
             return []
 
     @staticmethod
-    def get_expert_by_id(expert_id: str) -> dict[str, Any] | None:
-        """Fetch a specific expert by ID
+    def get_team_member_by_id(member_id: str) -> dict[str, Any] | None:
+        """Fetch a specific team member by ID
 
         Args:
-            expert_id: The expert identifier
+            member_id: The team member identifier
 
         Returns:
-            Expert data dictionary or None if not found
+            Team member data dictionary or None if not found
         """
         try:
-            experts = BlockzaClient.get_experts()
-            for expert in experts:
-                if expert.get("_id") == expert_id:
-                    return expert
+            team_members = BlockzaClient.get_team_members(limit=1000)
+            for member in team_members:
+                if member.get("_id") == member_id:
+                    return member
             return None
         except Exception as e:
-            print(f"Error fetching expert by ID: {e}")
+            print(f"Error fetching team member by ID: {e}")
             return None
 
     @staticmethod
@@ -675,78 +770,226 @@ def search_podcasts_by_company(company: str, limit: int = 5) -> str:
     return json.dumps({"podcasts": podcasts, "count": len(podcasts)}, indent=2)
 
 
-# ========== BLOCKZA EXPERT TOOLS ==========
+# ========== BLOCKZA STANDALONE EXPERTS TOOLS (FROM /api/experts) ==========
 
 @mcp.tool()
 def list_experts(limit: int = 5, offset: int = 0) -> str:
-    """List experts and consultants from Blockza directory
+    """List standalone experts from /api/experts endpoint
 
     Args:
         limit: Maximum number of experts to return (default: 5, max: 20)
         offset: Number of experts to skip for pagination (default: 0)
 
     Returns:
-        JSON string with experts data
+        JSON string with standalone experts data
     """
     # Cap limit to prevent token overflow
     limit = min(limit, 20)
     experts = BlockzaClient.get_experts(limit=limit, offset=offset)
-    return json.dumps({"experts": experts, "count": len(experts)}, indent=2)
+    return json.dumps({
+        "experts": experts,
+        "count": len(experts),
+        "source": "/api/experts",
+        "type": "standalone_experts"
+    }, indent=2)
 
 
 @mcp.tool()
-def search_experts(
-    query: str,
-    limit: int = 5,
-    category: Optional[str] = None
-) -> str:
-    """Search for experts by name or title
+def search_experts(query: str, limit: int = 5) -> str:
+    """Search for standalone experts by name or title from /api/experts
 
     Args:
-        query: Search term for expert name, title, or email
+        query: Search term for expert name or title
         limit: Maximum number of results (default: 5, max: 15)
-        category: Filter by company category (optional)
 
     Returns:
-        JSON string with matching experts
+        JSON string with matching standalone experts
     """
     # Cap limit to prevent token overflow
     limit = min(limit, 15)
-    experts = BlockzaClient.get_experts(search=query, limit=limit, category=category)
-    return json.dumps({"experts": experts, "count": len(experts)}, indent=2)
+    experts = BlockzaClient.get_experts(search=query, limit=limit)
+    return json.dumps({
+        "experts": experts,
+        "count": len(experts),
+        "source": "/api/experts",
+        "type": "standalone_experts"
+    }, indent=2)
 
 
 @mcp.tool()
 def get_expert_details(expert_id: str) -> str:
-    """Get detailed information about a specific expert
+    """Get detailed information about a standalone expert from /api/experts/:id
 
     Args:
-        expert_id: The expert identifier
+        expert_id: The standalone expert identifier
 
     Returns:
-        JSON string with expert details
+        JSON string with standalone expert details
     """
     expert = BlockzaClient.get_expert_by_id(expert_id)
     if expert is None:
         return json.dumps({"error": "Expert not found", "expert": None}, indent=2)
-    return json.dumps(expert, indent=2)
+    return json.dumps({
+        "expert": expert,
+        "source": "/api/experts",
+        "type": "standalone_expert"
+    }, indent=2)
 
 
 @mcp.tool()
-def get_experts_by_category(category: str, limit: int = 5) -> str:
-    """Get experts from companies in a specific category
+def get_top_experts(limit: int = 5, sort_by: str = "followers") -> str:
+    """Get top standalone experts sorted by engagement metrics
 
     Args:
-        category: The category to filter by
         limit: Maximum number of experts to return (default: 5, max: 15)
+        sort_by: Sort by 'followers', 'responseRate', or 'price' (default: 'followers')
 
     Returns:
-        JSON string with experts in the category
+        JSON string with top standalone experts
     """
     # Cap limit to prevent token overflow
     limit = min(limit, 15)
-    experts = BlockzaClient.get_experts(category=category, limit=limit)
-    return json.dumps({"experts": experts, "count": len(experts)}, indent=2)
+    experts = BlockzaClient.get_experts(limit=100)  # Get all to sort
+
+    if sort_by == "responseRate":
+        experts = sorted(experts, key=lambda x: x.get("responseRate", 0), reverse=True)
+    elif sort_by == "price":
+        experts = sorted(experts, key=lambda x: x.get("price", 0), reverse=True)
+    else:  # followers
+        experts = sorted(experts, key=lambda x: x.get("followers", 0), reverse=True)
+
+    return json.dumps({
+        "experts": experts[:limit],
+        "count": min(len(experts), limit),
+        "sortedBy": sort_by,
+        "source": "/api/experts",
+        "type": "standalone_experts"
+    }, indent=2)
+
+
+# ========== BLOCKZA TEAM MEMBERS TOOLS (FROM /api/directory companies) ==========
+
+@mcp.tool()
+def list_team_members(limit: int = 5, offset: int = 0) -> str:
+    """List company team members from /api/directory endpoint
+
+    Args:
+        limit: Maximum number of team members to return (default: 5, max: 20)
+        offset: Number to skip for pagination (default: 0)
+
+    Returns:
+        JSON string with company team members data
+    """
+    # Cap limit to prevent token overflow
+    limit = min(limit, 20)
+    team_members = BlockzaClient.get_team_members(limit=limit, offset=offset)
+    return json.dumps({
+        "team_members": team_members,
+        "count": len(team_members),
+        "source": "/api/directory",
+        "type": "company_team_members"
+    }, indent=2)
+
+
+@mcp.tool()
+def search_team_members(
+    query: str,
+    limit: int = 5,
+    company: Optional[str] = None,
+    category: Optional[str] = None
+) -> str:
+    """Search for company team members by name or title from /api/directory
+
+    Args:
+        query: Search term for member name or title
+        limit: Maximum number of results (default: 5, max: 15)
+        company: Filter by company name (optional)
+        category: Filter by company category (optional)
+
+    Returns:
+        JSON string with matching company team members
+    """
+    # Cap limit to prevent token overflow
+    limit = min(limit, 15)
+    team_members = BlockzaClient.get_team_members(
+        search=query,
+        limit=limit,
+        company=company,
+        category=category
+    )
+    return json.dumps({
+        "team_members": team_members,
+        "count": len(team_members),
+        "filters": {"search": query, "company": company, "category": category},
+        "source": "/api/directory",
+        "type": "company_team_members"
+    }, indent=2)
+
+
+@mcp.tool()
+def get_team_member_details(member_id: str) -> str:
+    """Get detailed information about a specific company team member
+
+    Args:
+        member_id: The team member identifier
+
+    Returns:
+        JSON string with team member details including company affiliation
+    """
+    member = BlockzaClient.get_team_member_by_id(member_id)
+    if member is None:
+        return json.dumps({"error": "Team member not found", "member": None}, indent=2)
+    return json.dumps({
+        "team_member": member,
+        "source": "/api/directory",
+        "type": "company_team_member"
+    }, indent=2)
+
+
+@mcp.tool()
+def get_team_members_by_company(company: str, limit: int = 5) -> str:
+    """Get all team members from a specific company
+
+    Args:
+        company: The company name to filter by
+        limit: Maximum number of team members to return (default: 5, max: 15)
+
+    Returns:
+        JSON string with team members from the specified company
+    """
+    # Cap limit to prevent token overflow
+    limit = min(limit, 15)
+    team_members = BlockzaClient.get_team_members(company=company, limit=limit)
+    return json.dumps({
+        "team_members": team_members,
+        "count": len(team_members),
+        "company": company,
+        "source": "/api/directory",
+        "type": "company_team_members"
+    }, indent=2)
+
+
+@mcp.tool()
+def get_team_members_by_category(category: str, limit: int = 5) -> str:
+    """Get team members from companies in a specific category
+
+    Args:
+        category: The company category to filter by
+        limit: Maximum number of team members to return (default: 5, max: 15)
+
+    Returns:
+        JSON string with team members in the category
+    """
+    # Cap limit to prevent token overflow
+    limit = min(limit, 15)
+    team_members = BlockzaClient.get_team_members(category=category, limit=limit)
+    return json.dumps({
+        "team_members": team_members,
+        "count": len(team_members),
+        "category": category,
+        "source": "/api/directory",
+        "type": "company_team_members"
+    }, indent=2)
 
 
 @mcp.tool()
@@ -805,29 +1048,98 @@ def get_companies_by_category(category: str, limit: int = 5) -> str:
     return json.dumps({"companies": companies, "count": len(companies)}, indent=2)
 
 
-@mcp.tool()
-def get_top_experts(limit: int = 5, sort_by: str = "followers") -> str:
-    """Get top experts sorted by engagement metrics
+# ========== BLOCKZA COMPANY RESOURCES ==========
+
+@mcp.resource("blockza://experts")
+def resource_all_experts() -> str:
+    """Access all standalone experts from /api/experts (limited to 20 for performance)"""
+    experts = BlockzaClient.get_experts(limit=20)
+    return json.dumps({
+        "experts": experts,
+        "count": len(experts),
+        "source": "/api/experts",
+        "type": "standalone_experts"
+    }, indent=2)
+
+
+@mcp.resource("blockza://experts/{expert_id}")
+def resource_expert_by_id(expert_id: str) -> str:
+    """Access a specific standalone expert by ID
 
     Args:
-        limit: Maximum number of experts to return (default: 5, max: 15)
-        sort_by: Sort by 'followers', 'responseRate', or 'price' (default: 'followers')
-
-    Returns:
-        JSON string with top experts
+        expert_id: The standalone expert identifier
     """
-    # Cap limit to prevent token overflow
-    limit = min(limit, 15)
-    experts = BlockzaClient.get_experts(limit=100)  # Get all to sort
+    expert = BlockzaClient.get_expert_by_id(expert_id)
+    if expert is None:
+        return json.dumps({"error": "Expert not found"}, indent=2)
+    return json.dumps({
+        "expert": expert,
+        "source": "/api/experts",
+        "type": "standalone_expert"
+    }, indent=2)
 
-    if sort_by == "responseRate":
-        experts = sorted(experts, key=lambda x: x.get("responseRate", 0), reverse=True)
-    elif sort_by == "price":
-        experts = sorted(experts, key=lambda x: x.get("price", 0), reverse=True)
-    else:  # followers
-        experts = sorted(experts, key=lambda x: x.get("followers", 0), reverse=True)
 
-    return json.dumps({"experts": experts[:limit], "count": min(len(experts), limit)}, indent=2)
+@mcp.resource("blockza://team-members")
+def resource_all_team_members() -> str:
+    """Access all company team members from /api/directory (limited to 20 for performance)"""
+    team_members = BlockzaClient.get_team_members(limit=20)
+    return json.dumps({
+        "team_members": team_members,
+        "count": len(team_members),
+        "source": "/api/directory",
+        "type": "company_team_members"
+    }, indent=2)
+
+
+@mcp.resource("blockza://team-members/{member_id}")
+def resource_team_member_by_id(member_id: str) -> str:
+    """Access a specific company team member by ID
+
+    Args:
+        member_id: The team member identifier
+    """
+    member = BlockzaClient.get_team_member_by_id(member_id)
+    if member is None:
+        return json.dumps({"error": "Team member not found"}, indent=2)
+    return json.dumps({
+        "team_member": member,
+        "source": "/api/directory",
+        "type": "company_team_member"
+    }, indent=2)
+
+
+@mcp.resource("blockza://team-members/company/{company}")
+def resource_team_members_by_company(company: str) -> str:
+    """Access team members filtered by company
+
+    Args:
+        company: The company name to filter by
+    """
+    team_members = BlockzaClient.get_team_members(company=company, limit=30)
+    return json.dumps({
+        "team_members": team_members,
+        "count": len(team_members),
+        "company": company,
+        "source": "/api/directory",
+        "type": "company_team_members"
+    }, indent=2)
+
+
+@mcp.resource("blockza://team-members/category/{category}")
+def resource_team_members_by_category(category: str) -> str:
+    """Access team members filtered by company category
+
+    Args:
+        category: The category to filter by
+    """
+    team_members = BlockzaClient.get_team_members(category=category, limit=30)
+    return json.dumps({
+        "team_members": team_members,
+        "count": len(team_members),
+        "category": category,
+        "source": "/api/directory",
+        "type": "company_team_members"
+    }, indent=2)
 
 
 # ========== BLOCKZA EVENT RESOURCES ==========
@@ -914,46 +1226,18 @@ def resource_podcasts_by_company(company: str) -> str:
     return json.dumps({"podcasts": podcasts, "count": len(podcasts)}, indent=2)
 
 
-# ========== BLOCKZA EXPERT RESOURCES ==========
-
-@mcp.resource("blockza://experts")
-def resource_all_experts() -> str:
-    """Access all experts from Blockza directory (limited to 20 for performance)"""
-    experts = BlockzaClient.get_experts(limit=20)
-    return json.dumps({"experts": experts, "count": len(experts)}, indent=2)
-
-
-@mcp.resource("blockza://experts/{expert_id}")
-def resource_expert_by_id(expert_id: str) -> str:
-    """Access a specific expert by ID
-
-    Args:
-        expert_id: The expert identifier
-    """
-    expert = BlockzaClient.get_expert_by_id(expert_id)
-    if expert is None:
-        return json.dumps({"error": "Expert not found"}, indent=2)
-    return json.dumps(expert, indent=2)
-
-
-@mcp.resource("blockza://experts/category/{category}")
-def resource_experts_by_category(category: str) -> str:
-    """Access experts filtered by company category
-
-    Args:
-        category: The category to filter by
-    """
-    experts = BlockzaClient.get_experts(category=category, limit=30)
-    return json.dumps({"experts": experts, "count": len(experts)}, indent=2)
-
-
 # ========== BLOCKZA COMPANY RESOURCES ==========
 
 @mcp.resource("blockza://companies")
 def resource_all_companies() -> str:
-    """Access all companies from Blockza directory (limited to 20 for performance)"""
+    """Access all companies from /api/directory (limited to 20 for performance)"""
     companies = BlockzaClient.get_companies(limit=20)
-    return json.dumps({"companies": companies, "count": len(companies)}, indent=2)
+    return json.dumps({
+        "companies": companies,
+        "count": len(companies),
+        "source": "/api/directory",
+        "type": "companies"
+    }, indent=2)
 
 
 @mcp.resource("blockza://companies/{company_id}")
@@ -966,7 +1250,11 @@ def resource_company_by_id(company_id: str) -> str:
     company = BlockzaClient.get_company_by_id(company_id)
     if company is None:
         return json.dumps({"error": "Company not found"}, indent=2)
-    return json.dumps(company, indent=2)
+    return json.dumps({
+        "company": company,
+        "source": "/api/directory",
+        "type": "company"
+    }, indent=2)
 
 
 @mcp.resource("blockza://companies/category/{category}")
@@ -977,7 +1265,13 @@ def resource_companies_by_category(category: str) -> str:
         category: The category to filter by
     """
     companies = BlockzaClient.get_companies(category=category, limit=30)
-    return json.dumps({"companies": companies, "count": len(companies)}, indent=2)
+    return json.dumps({
+        "companies": companies,
+        "count": len(companies),
+        "category": category,
+        "source": "/api/directory",
+        "type": "companies"
+    }, indent=2)
 
 
 # ========== BLOCKZA EVENT PROMPTS ==========
